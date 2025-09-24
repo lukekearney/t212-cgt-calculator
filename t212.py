@@ -4,7 +4,6 @@ import argparse
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 from datetime import datetime
 from functools import reduce
 from pathlib import Path
@@ -23,19 +22,12 @@ class Event:
     cost_of_transaction:float = 0.0
 
 
-def calculate_gain_for_ticker(events: list[Event], start_date: Optional[datetime]=None, end_date: Optional[datetime]=None) -> float:
+def calculate_gain_for_ticker(events: list[Event], start_date: datetime, end_date: datetime) -> float:
     # Filter events by date range if provided
-    if start_date and end_date:
-        all_sells = [ev for ev in events if ev.evType == EventType.SELL and start_date <= ev.date <= end_date]
-        all_buys = [ev for ev in events if ev.evType == EventType.BUY and ev.date <= end_date]
-        # Prior sells are those before start_date
-        prior_sells = [sale.num_shares for sale in events if sale.evType == EventType.SELL and sale.date < start_date]
-    else:
-        # fallback: use all events in the current year (legacy behavior)
-        year = datetime.now().year
-        all_sells = [ev for ev in events if ev.evType == EventType.SELL and ev.date.year == year]
-        all_buys = [ev for ev in events if ev.evType == EventType.BUY]
-        prior_sells = [sale.num_shares for sale in events if sale.evType == EventType.SELL and sale.date.year < year]
+    all_sells = [ev for ev in events if ev.evType == EventType.SELL and start_date <= ev.date <= end_date]
+    all_buys = [ev for ev in events if ev.evType == EventType.BUY and ev.date <= end_date]
+    # Prior sells are those before start_date
+    prior_sells = [sale.num_shares for sale in events if sale.evType == EventType.SELL and sale.date < start_date]
 
     if prior_sells:
         total_prior_shares_sold = reduce(lambda a, b: a + b, prior_sells)

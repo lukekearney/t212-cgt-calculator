@@ -4,6 +4,11 @@ import unittest
 from t212 import Event, EventType, calculate_gain_for_ticker
 
 class CalculationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.default_start_date = datetime(2025, 1, 1, 0, 0, 0)
+        cls.default_end_date = datetime(2025, 12, 31, 23, 59, 59)
+
     def test_gain_within_date_range(self):
         test_input = [
             Event(evType=EventType.BUY, date=datetime(2025, 1, 1, 0, 0, 0), num_shares=100, value=10.0),
@@ -49,7 +54,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 6, 15, 0, 0, 0, 0), num_shares=100, value=12.0)
         ]
         expected_output = 200
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_buy_sell_same_year_loss(self):
@@ -58,7 +63,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 6, 15, 0, 0, 0, 0), num_shares=100, value=8.0)
         ]
         expected_output = -200
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_buy_partial_sell_same_year(self):
@@ -67,7 +72,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 6, 15, 0, 0, 0, 0), num_shares=50, value=12.0)
         ]
         expected_output = 100
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_multi_buy_sell_buy_sell_same_year_loss(self):
@@ -78,7 +83,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 8, 20, 0, 0, 0, 0), num_shares=100, value=7.0),
         ]
         expected_output = -400
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_multi_buy_sell_buy_sell_same_year_loss2(self):
@@ -89,7 +94,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 8, 20, 0, 0, 0, 0), num_shares=100, value=7.0),
         ]
         expected_output = -100
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_multi_buy_sell_buy_sell_same_year_gain(self):
@@ -100,7 +105,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 8, 20, 0, 0, 0, 0), num_shares=100, value=7.0),
         ]
         expected_output = 100
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_multi_buy_sell_buy_sell_same_year_big_gain(self):
@@ -111,7 +116,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 8, 20, 0, 0, 0, 0), num_shares=100, value=11.0),
         ]
         expected_output = 300
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_buy_prev_year_sell_this_year(self):
@@ -120,7 +125,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 6, 15, 0, 0, 0, 0), num_shares=100, value=13.0),
         ]
         expected_output = 300
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_buy_prev_year_buy_more_sell_this_year(self):
@@ -130,7 +135,7 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 8, 20, 0, 0, 0, 0), num_shares=150, value=11.0),
         ]
         expected_output = 200
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
 
     def test_buy_prev_year_partial_sell_last_year_buy_more_sell_this_year(self):
@@ -141,5 +146,5 @@ class CalculationTests(unittest.TestCase):
             Event(evType=EventType.SELL, date=datetime(2025, 8, 20, 0, 0, 0, 0), num_shares=150, value=11.0),
         ]
         expected_output = 250
-        result = calculate_gain_for_ticker(test_input)
+        result = calculate_gain_for_ticker(test_input, self.default_start_date, self.default_end_date)
         self.assertEqual(result, expected_output)
