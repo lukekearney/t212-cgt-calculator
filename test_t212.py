@@ -4,6 +4,45 @@ import unittest
 from t212 import Event, EventType, calculate_gain_for_ticker
 
 class CalculationTests(unittest.TestCase):
+    def test_gain_within_date_range(self):
+        test_input = [
+            Event(evType=EventType.BUY, date=datetime(2025, 1, 1, 0, 0, 0), num_shares=100, value=10.0),
+            Event(evType=EventType.SELL, date=datetime(2025, 3, 1, 0, 0, 0), num_shares=50, value=12.0),
+            Event(evType=EventType.SELL, date=datetime(2025, 7, 1, 0, 0, 0), num_shares=50, value=13.0),
+        ]
+        # Only consider sales between March and July
+        start_date = datetime(2025, 3, 1, 0, 0, 0)
+        end_date = datetime(2025, 7, 1, 0, 0, 0)
+        expected_output = 100 + 150
+        result = calculate_gain_for_ticker(test_input, start_date, end_date)
+        self.assertEqual(result, expected_output)
+
+    def test_gain_outside_date_range(self):
+        test_input = [
+            Event(evType=EventType.BUY, date=datetime(2025, 1, 1, 0, 0, 0), num_shares=100, value=10.0),
+            Event(evType=EventType.SELL, date=datetime(2025, 2, 1, 0, 0, 0), num_shares=50, value=12.0),
+            Event(evType=EventType.SELL, date=datetime(2025, 8, 1, 0, 0, 0), num_shares=50, value=13.0),
+        ]
+        # Only consider sales between March and July (should be zero)
+        start_date = datetime(2025, 3, 1, 0, 0, 0)
+        end_date = datetime(2025, 7, 1, 0, 0, 0)
+        expected_output = 0
+        result = calculate_gain_for_ticker(test_input, start_date, end_date)
+        self.assertEqual(result, expected_output)
+
+    def test_gain_partial_date_range(self):
+        test_input = [
+            Event(evType=EventType.BUY, date=datetime(2025, 1, 1, 0, 0, 0), num_shares=100, value=10.0),
+            Event(evType=EventType.SELL, date=datetime(2025, 4, 1, 0, 0, 0), num_shares=50, value=12.0),
+            Event(evType=EventType.SELL, date=datetime(2025, 10, 1, 0, 0, 0), num_shares=50, value=13.0),
+        ]
+        # Only consider sales between March and September
+        start_date = datetime(2025, 3, 1, 0, 0, 0)
+        end_date = datetime(2025, 9, 30, 23, 59, 59)
+        expected_output = 100  # Only the April sale
+        result = calculate_gain_for_ticker(test_input, start_date, end_date)
+        self.assertEqual(result, expected_output)
+
     def test_buy_sell_same_year(self):
         test_input = [
             Event(evType=EventType.BUY, date=datetime(2025, 1, 31, 0, 0, 0, 0), num_shares=100, value=10.0),

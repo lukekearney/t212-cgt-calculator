@@ -4,6 +4,7 @@ import argparse
 import os
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 from datetime import datetime
 from functools import reduce
 from pathlib import Path
@@ -22,15 +23,20 @@ class Event:
     cost_of_transaction:float = 0.0
 
 
-def calculate_gain_for_ticker(events:list[Event]) -> list[Event]:
-    # filters the events to only those relevant for the year
-    # remove prior sells. We need to reduce the number of shares owned because they are sold on a first in first out basis for tax calculation
-    # if shares were purchased 5 years ago, they must be included, even if they were partially sold in the previous year
-    # extract all sell orders before this year and total up the number of shares sold
-    all_sells = [ev for ev in events if ev.evType == EventType.SELL]
-    all_buys = [ev for ev in events if ev.evType == EventType.BUY]
-    sells_this_year = [sale for sale in all_sells if sale.date.year == 2025]
-    prior_sells = [sale.num_shares for sale in all_sells if sale.date.year < 2025]
+def calculate_gain_for_ticker(events: list[Event], start_date: Optional[datetime]=None, end_date: Optional[datetime]=None) -> float:
+    # Filter events by date range if provided
+    if start_date and end_date:
+        all_sells = [ev for ev in events if ev.evType == EventType.SELL and start_date <= ev.date <= end_date]
+        all_buys = [ev for ev in events if ev.evType == EventType.BUY and ev.date <= end_date]
+        # Prior sells are those before start_date
+        prior_sells = [sale.num_shares for sale in events if sale.evType == EventType.SELL and sale.date < start_date]
+    else:
+        # fallback: use all events in the current year (legacy behavior)
+        year = datetime.now().year
+        all_sells = [ev for ev in events if ev.evType == EventType.SELL and ev.date.year == year]
+        all_buys = [ev for ev in events if ev.evType == EventType.BUY]
+        prior_sells = [sale.num_shares for sale in events if sale.evType == EventType.SELL and sale.date.year < year]
+
     if prior_sells:
         total_prior_shares_sold = reduce(lambda a, b: a + b, prior_sells)
     else:
@@ -58,8 +64,8 @@ def calculate_gain_for_ticker(events:list[Event]) -> list[Event]:
     buy_index = 0
     sale_index = 0
     cgt = 0
-    while sale_index < len(sells_this_year):
-        this_sale = sells_this_year[sale_index]
+    while sale_index < len(all_sells):
+        this_sale = all_sells[sale_index]
         profit_per_share = this_sale.value - relevant_buys[buy_index].value
         if relevant_buys[buy_index].num_shares > this_sale.num_shares:
             # more buys than those sold. Reduce the number of buys by the number of sales and calculate cgt
@@ -116,23 +122,36 @@ def read_csv(csv_path:Path, user_currency:str) -> dict[str, list[Event]]:
 
 def get_user_args():
     parser = argparse.ArgumentParser(description="Process T212 CGT calculator arguments.")
-    parser.add_argument('--year', type=int, default=datetime.now().year, help='Year for CGT calculation (defaults to current year)')
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--year', type=int, help='Year for CGT calculation')
+    group.add_argument('--date-range', nargs=2, metavar=('START', 'END'), help='Start and end date in YYYY-MM-DD format')
     parser.add_argument('--csv', type=Path, required=True, help='Path to CSV file containing buy/sell information')
     parser.add_argument('--currency', type=str, default=os.environ.get('T212_CURRENCY', 'EUR'), help='Primary currency (defaults to T212_CURRENCY env var or EUR)')
     parser.add_argument('--rate', type=float, default=os.environ.get('CGT_RATE', '0.33'), help='The rate of CGT tax (defaults to CGT_RATE env var or 0.33)')
     args = parser.parse_args()
-    year = args.year
+
+    if args.year is not None:
+        year = args.year
+        start_date = datetime(year, 1, 1)
+        end_date = datetime(year, 12, 31, 23, 59, 59)
+    elif args.date_range:
+        start_date = datetime.strptime(args.date_range[0], "%Y-%m-%d")
+        end_date = datetime.strptime(args.date_range[1], "%Y-%m-%d")
+        year = None
+    else:
+        parser.error("Either --year or both --start and --end must be provided.")
+
     csv_path = args.csv
     currency = args.currency
     rate = args.rate
-    return year, csv_path, currency, rate
+    return start_date, end_date, csv_path, currency, rate
 
 if __name__ == "__main__":
-    year, csv_path, currency, rate = get_user_args()
+    start_date, end_date, csv_path, currency, rate = get_user_args()
     ticker_events = read_csv(csv_path, currency)
     total_gain = 0.0
     for ticker, events in ticker_events.items():
-        gain = calculate_gain_for_ticker(events)
+        gain = calculate_gain_for_ticker(events, start_date=start_date, end_date=end_date)
         if gain != 0.0:
             print(f"{ticker}: {gain:.2f} {currency}")
         total_gain += gain
