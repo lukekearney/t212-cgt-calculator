@@ -1,7 +1,10 @@
 from datetime import datetime
 import unittest
 
-from core import Event, EventType, calculate_gain_for_ticker, get_deemed_disposals
+from core import (
+    Event, EventType, OptionEvent,
+    calculate_gain_for_ticker, calculate_option_gain_for_contract, get_deemed_disposals,
+)
 
 class CalculationTests(unittest.TestCase):
     @classmethod
@@ -366,6 +369,70 @@ class DeemedDisposalTests(unittest.TestCase):
         # Results sorted by anniversary date
         self.assertEqual(result[0][0], datetime(2025, 2, 1))
         self.assertEqual(result[1][0], datetime(2025, 8, 1))
+
+
+class OptionGainTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.start_2025 = datetime(2025, 1, 1)
+        cls.end_2025 = datetime(2025, 12, 31, 23, 59, 59)
+
+    def test_bought_option_closed_for_gain(self):
+        events = [
+            OptionEvent(datetime(2025, 1, 1), is_open=True, quantity=1, net_cash=-150.0),
+            OptionEvent(datetime(2025, 2, 1), is_open=False, quantity=1, net_cash=190.0),
+        ]
+        result = calculate_option_gain_for_contract(events, self.start_2025, self.end_2025)
+        self.assertAlmostEqual(result, 40.0)
+
+    def test_written_option_closed_for_loss(self):
+        events = [
+            OptionEvent(datetime(2025, 1, 1), is_open=True, quantity=1, net_cash=150.0),
+            OptionEvent(datetime(2025, 2, 1), is_open=False, quantity=1, net_cash=-200.0),
+        ]
+        result = calculate_option_gain_for_contract(events, self.start_2025, self.end_2025)
+        self.assertAlmostEqual(result, -50.0)
+
+    def test_bought_option_expires_worthless_is_full_loss(self):
+        events = [
+            OptionEvent(datetime(2025, 1, 1), is_open=True, quantity=1, net_cash=-150.0),
+            OptionEvent(datetime(2025, 3, 1), is_open=False, quantity=1, net_cash=0.0),
+        ]
+        result = calculate_option_gain_for_contract(events, self.start_2025, self.end_2025)
+        self.assertAlmostEqual(result, -150.0)
+
+    def test_written_option_expires_worthless_is_full_gain(self):
+        events = [
+            OptionEvent(datetime(2025, 1, 1), is_open=True, quantity=1, net_cash=150.0),
+            OptionEvent(datetime(2025, 3, 1), is_open=False, quantity=1, net_cash=0.0),
+        ]
+        result = calculate_option_gain_for_contract(events, self.start_2025, self.end_2025)
+        self.assertAlmostEqual(result, 150.0)
+
+    def test_multi_lot_fifo_partial_fills(self):
+        events = [
+            OptionEvent(datetime(2025, 1, 1), is_open=True, quantity=2, net_cash=-200.0),  # -100/contract
+            OptionEvent(datetime(2025, 1, 5), is_open=True, quantity=1, net_cash=-150.0),  # -150/contract
+            OptionEvent(datetime(2025, 2, 1), is_open=False, quantity=3, net_cash=450.0),  # +150/contract
+        ]
+        # FIFO: 2 contracts @ -100 + 1 contract @ -150 = -350 cost, closed for +450 => gain 100
+        result = calculate_option_gain_for_contract(events, self.start_2025, self.end_2025)
+        self.assertAlmostEqual(result, 100.0)
+
+    def test_close_outside_date_range_excluded(self):
+        events = [
+            OptionEvent(datetime(2024, 6, 1), is_open=True, quantity=1, net_cash=-150.0),
+            OptionEvent(datetime(2024, 7, 1), is_open=False, quantity=1, net_cash=190.0),
+        ]
+        result = calculate_option_gain_for_contract(events, self.start_2025, self.end_2025)
+        self.assertEqual(result, 0.0)
+
+    def test_close_without_matching_open_raises(self):
+        events = [
+            OptionEvent(datetime(2025, 1, 1), is_open=False, quantity=1, net_cash=100.0),
+        ]
+        with self.assertRaises(ValueError):
+            calculate_option_gain_for_contract(events, self.start_2025, self.end_2025)
 
 
 if __name__ == '__main__':

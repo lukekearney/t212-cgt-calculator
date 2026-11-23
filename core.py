@@ -21,6 +21,20 @@ class Event:
     cost_of_transaction: float = 0.0
 
 
+@dataclass
+class OptionEvent:
+    """A single opening or closing leg of an options contract.
+
+    `net_cash` is the total signed cash flow for this leg (negative = cash
+    paid out, positive = cash received), inclusive of commissions/taxes.
+    Expiry (abandonment) is represented as a closing leg with net_cash=0.0.
+    """
+    date: datetime
+    is_open: bool
+    quantity: float
+    net_cash: float
+
+
 _EPSILON = 1e-9
 
 _DEFAULT_RATES = {
@@ -127,6 +141,46 @@ def calculate_gain_for_ticker(events: list[Event], start_date: datetime, end_dat
     return cgt
 
 
+def calculate_option_gain_for_contract(
+    events: list[OptionEvent], start_date: datetime, end_date: datetime
+) -> float:
+    """Calculate CGT on a single option contract (TCA 1997 s.541).
+
+    Options are a distinct asset class from shares — the same-day/4-week
+    share-identification rules (s.581) don't apply, so this is plain FIFO
+    with no date-window matching. Each closing leg (including expiry, which
+    is a closing leg with net_cash=0.0 — full loss to the holder, full gain
+    to the writer) is matched against the oldest remaining opening leg(s).
+    The gain on the matched quantity is the sum of the opening and closing
+    legs' net cash flow (each already signed: negative = paid, positive =
+    received), which naturally handles long and short positions, partial
+    fills, and expiry without separate-case logic.
+    """
+    events_sorted = sorted(events, key=lambda e: e.date)
+    opens = [{"remaining": e.quantity, "unit_cash": e.net_cash / e.quantity} for e in events_sorted if e.is_open]
+    closes = [e for e in events_sorted if not e.is_open]
+
+    gain = 0.0
+    for close in closes:
+        remaining = close.quantity
+        unit_cash = close.net_cash / close.quantity
+        for lot in opens:
+            if lot["remaining"] <= _EPSILON or remaining <= _EPSILON:
+                continue
+            matched = min(lot["remaining"], remaining)
+            if start_date <= close.date <= end_date:
+                gain += (lot["unit_cash"] + unit_cash) * matched
+            lot["remaining"] -= matched
+            remaining -= matched
+        if remaining > _EPSILON:
+            raise ValueError(
+                "Ran out of opening legs with a closing leg remaining. "
+                "This may indicate an option opened before the available history."
+            )
+
+    return gain
+
+
 def get_deemed_disposals(
     events: list[Event], start_date: datetime, end_date: datetime
 ) -> list[tuple[datetime, float, float]]:
@@ -231,7 +285,22 @@ def init_db(db_path: str) -> sqlite3.Connection:
             withholding_eur REAL NOT NULL DEFAULT 0.0,
             is_tax_exempt INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS option_trades (
+            id TEXT PRIMARY KEY,
+            time TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            description TEXT NOT NULL,
+            is_open INTEGER NOT NULL,
+            quantity REAL NOT NULL,
+            net_cash_eur REAL NOT NULL,
+            broker TEXT NOT NULL DEFAULT 'IBKR'
+        );
     """)
+    for table in ("trades", "interest", "dividends"):
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN broker TEXT NOT NULL DEFAULT 'T212'")
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
     return conn
 
@@ -250,6 +319,21 @@ def load_events_from_db(db_path: str) -> dict[str, list[Event]]:
         ticker_events.setdefault(f"{ticker}({name})", []).append(event)
     conn.close()
     return ticker_events
+
+
+def load_option_events_from_db(db_path: str) -> dict[str, list[OptionEvent]]:
+    conn = sqlite3.connect(db_path)
+    cursor = conn.execute(
+        "SELECT symbol, description, is_open, time, quantity, net_cash_eur FROM option_trades ORDER BY time ASC"
+    )
+    contract_events: dict[str, list[OptionEvent]] = {}
+    for row in cursor.fetchall():
+        symbol, description, is_open, time_str, quantity, net_cash = row
+        date = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+        event = OptionEvent(date=date, is_open=bool(is_open), quantity=quantity, net_cash=net_cash)
+        contract_events.setdefault(f"{symbol}({description})", []).append(event)
+    conn.close()
+    return contract_events
 
 
 def load_income_from_db(db_path: str, start_date: datetime, end_date: datetime) -> tuple[float, dict[str, DividendInfo]]:

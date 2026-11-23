@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
+"""Trading 212-specific parsing, import, and API fetching."""
 import base64
 import csv
-import argparse
-import os
 import json
 import time
 import urllib.request
@@ -10,12 +8,7 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 
-from core import (
-    Event, EventType, DividendInfo,
-    calculate_gain_for_ticker, get_deemed_disposals,
-    dividend_tax_owed, load_rates,
-    init_db, load_events_from_db, load_income_from_db,
-)
+from core import Event, EventType, DividendInfo, init_db
 
 
 def read_csv(csv_path: Path, user_currency: str) -> dict[str, list[Event]]:
@@ -215,7 +208,7 @@ def import_csv_to_db(csv_path: Path, db_path: str, user_currency: str) -> tuple[
                 cost_of_transaction = stamp_duty + currency_fee + french_tax + finra_fee
                 event_type = 'SELL' if 'sell' in action.lower() else 'BUY'
                 cursor = conn.execute(
-                    "INSERT OR IGNORE INTO trades (id, time, ticker, name, event_type, num_shares, price_per_share_eur, cost_of_transaction_eur) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO trades (id, time, ticker, name, event_type, num_shares, price_per_share_eur, cost_of_transaction_eur, broker) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'T212')",
                     (row_id, time_str, ticker, name, event_type, num_shares, price_per_share, cost_of_transaction)
                 )
                 trades_added += cursor.rowcount
@@ -223,7 +216,7 @@ def import_csv_to_db(csv_path: Path, db_path: str, user_currency: str) -> tuple[
             elif action == 'Interest on cash':
                 amount_eur = float(row.get('Total', 0) or 0)
                 cursor = conn.execute(
-                    "INSERT OR IGNORE INTO interest (id, time, amount_eur) VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO interest (id, time, amount_eur, broker) VALUES (?, ?, ?, 'T212')",
                     (row_id, time_str, amount_eur)
                 )
                 interest_added += cursor.rowcount
@@ -239,7 +232,7 @@ def import_csv_to_db(csv_path: Path, db_path: str, user_currency: str) -> tuple[
                 is_tax_exempt = 1 if action == 'Dividend (Tax exempted)' else 0
                 div_id = f"{time_str}|{ticker}|{action}"
                 cursor = conn.execute(
-                    "INSERT OR IGNORE INTO dividends (id, time, ticker, name, isin, gross_eur, withholding_eur, is_tax_exempt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO dividends (id, time, ticker, name, isin, gross_eur, withholding_eur, is_tax_exempt, broker) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'T212')",
                     (div_id, time_str, ticker, name, isin, gross_eur, withholding_eur, is_tax_exempt)
                 )
                 dividends_added += cursor.rowcount
@@ -247,116 +240,3 @@ def import_csv_to_db(csv_path: Path, db_path: str, user_currency: str) -> tuple[
     conn.commit()
     conn.close()
     return trades_added, interest_added, dividends_added
-
-
-def get_user_args():
-    parser = argparse.ArgumentParser(description="Process T212 CGT calculator arguments.")
-    parser.add_argument('--import-csv', type=Path, metavar='CSV', help='Import a CSV file into the local DB cache')
-    parser.add_argument('--db', type=str, default='./t212.db', help='Path to SQLite cache DB (default: ./t212.db)')
-    period_group = parser.add_mutually_exclusive_group()
-    period_group.add_argument('--year', type=int, help='Year for CGT calculation')
-    period_group.add_argument('--date-range', nargs=2, metavar=('START', 'END'), help='Start and end date in YYYY-MM-DD format')
-    source_group = parser.add_mutually_exclusive_group()
-    source_group.add_argument('--csv', type=Path, help='Path to CSV file containing buy/sell information')
-    source_group.add_argument('--api', action='store_true', help='Fetch data from the Trading 212 API')
-    parser.add_argument('--api-key', type=str, default=os.environ.get('T212_API_KEY_CG_CALC'), help='Trading 212 API key (defaults to T212_API_KEY env var)')
-    parser.add_argument('--currency', type=str, default=os.environ.get('T212_CURRENCY', 'EUR'), help='Primary currency (defaults to T212_CURRENCY env var or EUR)')
-    cgt_rate_env = os.environ.get('CGT_RATE')
-    parser.add_argument('--rate', type=float, default=float(cgt_rate_env) if cgt_rate_env else None, help='Override CGT rate (default: from rates JSON or CGT_RATE env var)')
-    parser.add_argument('--rates-dir', type=str, default='./rates', help='Directory containing annual tax rate JSON files (default: ./rates)')
-    args = parser.parse_args()
-
-    if args.api and not args.api_key:
-        parser.error("--api requires an API key via --api-key or the T212_API_KEY_CG_CALC environment variable")
-    if not args.import_csv and not args.year and not args.date_range:
-        parser.error("one of --year or --date-range is required unless --import-csv is used")
-
-    return args
-
-
-if __name__ == "__main__":
-    args = get_user_args()
-    currency = args.currency
-
-    if args.import_csv:
-        trades, interest, dividends = import_csv_to_db(args.import_csv, args.db, currency)
-        print(f"Imported: {trades} trade(s), {interest} interest row(s), {dividends} dividend(s)")
-    else:
-        if args.year is not None:
-            start_date = datetime(args.year, 1, 1)
-            end_date = datetime(args.year, 12, 31, 23, 59, 59)
-        else:
-            start_date = datetime.strptime(args.date_range[0], "%Y-%m-%d")
-            end_date = datetime.strptime(args.date_range[1], "%Y-%m-%d")
-
-        rates = load_rates(end_date.year, args.rates_dir)
-        if args.rate is not None:
-            rates['cgt_rate'] = args.rate
-
-        if args.api:
-            api_secret = os.environ.get("T212_API_SECRET_CG_CALC")
-            ticker_events = fetch_from_api(args.api_key, api_secret, currency, end_date)
-        elif args.csv:
-            ticker_events = read_csv(args.csv, currency)
-        else:
-            ticker_events = load_events_from_db(args.db)
-
-        total_gain = 0.0
-        for ticker, events in ticker_events.items():
-            try:
-                gain = calculate_gain_for_ticker(events, start_date=start_date, end_date=end_date)
-            except ValueError as e:
-                print(f"Warning: skipping {ticker} — {e}")
-                continue
-            if gain != 0.0:
-                print(f"{ticker}: {gain:.2f} {currency}")
-            total_gain += gain
-        cgt_rate = rates['cgt_rate']
-        print(f"Total Gain: {total_gain:.2f} {currency}")
-        print(f"CGT due: {(total_gain * cgt_rate):.2f} {currency}")
-
-        if not args.api:
-            if args.csv:
-                total_interest, income_dividends = calculate_income_from_csv(args.csv, currency, start_date, end_date)
-            else:
-                total_interest, income_dividends = load_income_from_db(args.db, start_date, end_date)
-
-            dirt_rate = rates['interest_dirt_rate']
-            print(f"\n--- Interest ---")
-            print(f"Total interest: {total_interest:.2f} {currency}")
-            print(f"Tax owed ({dirt_rate*100:.0f}%): {total_interest * dirt_rate:.2f} {currency}")
-
-            if income_dividends:
-                print(f"\n--- Dividends ---")
-                total_div_gross = 0.0
-                total_div_tax = 0.0
-                for ticker_key, div in income_dividends.items():
-                    tax = dividend_tax_owed(div, rates)
-                    if div.is_tax_exempt:
-                        tag = " [tax-exempt]"
-                    elif div.is_etf:
-                        tag = " [ETF]"
-                    elif div.is_us:
-                        tag = " [US equity]"
-                    else:
-                        tag = ""
-                    print(f"  {ticker_key}{tag}: {div.gross_eur:.2f} {currency} gross → {tax:.2f} {currency} tax owed")
-                    total_div_gross += div.gross_eur
-                    total_div_tax += tax
-                print(f"Total dividends: {total_div_gross:.2f} {currency}")
-                print(f"Total dividend tax owed: {total_div_tax:.2f} {currency}")
-
-            exit_tax_tickers = rates.get('exit_tax_fund_tickers', [])
-            if exit_tax_tickers:
-                etf_rate = rates['etf_exit_tax_rate']
-                triggered = []
-                for ticker_key, events in ticker_events.items():
-                    ticker = ticker_key.split('(')[0]
-                    if ticker in exit_tax_tickers:
-                        for anniversary, shares, cost in get_deemed_disposals(events, start_date, end_date):
-                            triggered.append((ticker_key, anniversary, shares, cost))
-                if triggered:
-                    print(f"\n--- Deemed Disposal (8-year rule, {etf_rate*100:.0f}% exit tax) ---")
-                    for ticker_key, anniversary, shares, cost in sorted(triggered, key=lambda x: x[1]):
-                        print(f"  {ticker_key}: {shares:.6f} shares at cost {cost:.4f} {currency}/share — anniversary {anniversary.date()}")
-                        print(f"    Apply {etf_rate*100:.0f}% exit tax to (NAV on {anniversary.date()} − {cost:.4f}) × {shares:.6f}")

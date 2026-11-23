@@ -1,0 +1,8 @@
+{
+  "cgt_rate": 0.33,
+  "etf_exit_tax_rate": 0.38,
+  "income_tax_rate": 0.52,
+  "us_withholding_treaty_credit": 0.15,
+  "interest_dirt_rate": 0.33,
+  "exit_tax_fund_tickers": []
+}
